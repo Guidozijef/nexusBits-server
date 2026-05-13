@@ -74,14 +74,31 @@ auth.post('/login', async (c) => {
   const { email, password } = body;
 
   if (!email || !password) {
-    return c.json<ApiResponse>({ success: false, error: '邮箱和密码不能为空' }, 400);
+    return c.json<ApiResponse>({ success: false, error: '账号和密码不能为空' }, 400);
+  }
+
+  let loginEmail = email;
+
+  // If the input doesn't look like an email, assume it's a display_name
+  if (!email.includes('@') && supabaseAdmin) {
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('email')
+      .eq('display_name', email)
+      .single();
+
+    if (!error && profile && profile.email) {
+      loginEmail = profile.email;
+    } else {
+      return c.json<ApiResponse>({ success: false, error: '账号或密码错误' }, 401);
+    }
   }
 
   const supabase = createSupabaseClient();
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
   if (error) {
-    const errorMsg = error.message === 'Invalid login credentials' ? '邮箱或密码错误' : error.message;
+    const errorMsg = error.message === 'Invalid login credentials' ? '账号或密码错误' : error.message;
     return c.json<ApiResponse>({ success: false, error: errorMsg }, 401);
   }
 
