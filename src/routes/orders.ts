@@ -1,0 +1,235 @@
+import { Hono } from 'hono';
+import { createSupabaseClient, supabaseAdmin } from '../lib/supabase';
+import { authMiddleware } from '../middleware/auth';
+import type { ApiResponse, PaginatedResponse, Order, DirectBuyBody, Variables } from '../types';
+
+const orders = new Hono<{ Variables: Variables }>();
+
+// All order routes require authentication
+orders.use('*', authMiddleware);
+
+/**
+ * Generate a unique order number like "#NXB-77291A"
+ */
+function generateOrderNo(): string {
+  const hex = Math.random().toString(16).substring(2, 8).toUpperCase();
+  return `#NXB-${hex}`;
+}
+
+/**
+ * GET /api/orders
+ * Get current user's orders with pagination
+ */
+orders.get('/', async (c) => {
+  const userId = c.get('userId');
+  const token = c.get('accessToken');
+  const page = parseInt(c.req.query('page') || '1');
+  const limit = parseInt(c.req.query('limit') || '10');
+  const offset = (page - 1) * limit;
+
+  const supabase = createSupabaseClient(token);
+
+  const { data, error, count } = await supabase
+    .from('orders')
+    .select('*, items:order_items(id, product_id, product_name, price, quantity)', { count: 'exact' })
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    return c.json<ApiResponse>({ success: false, error: error.message }, 500);
+  }
+
+  return c.json<PaginatedResponse<Order>>({
+    success: true,
+    data: data || [],
+    total: count || 0,
+    page,
+    limit
+  });
+});
+
+/**
+ * POST /api/orders
+ * Create order from cart (checkout)
+ * Deducts balance, creates order + order_items, clears cart, grants assets
+ */
+orders.post('/', async (c) => {
+  const userId = c.get('userId');
+  const token = c.get('accessToken');
+  const supabase = createSupabaseClient(token);
+
+  // 1. Get cart items with product details
+  const { data: cartItems, error: cartError } = await supabase
+    .from('cart_items')
+    .select('*, product:products(id, name, price)')
+    .eq('user_id', userId);
+
+  if (cartError) {
+    return c.json<ApiResponse>({ success: false, error: cartError.message }, 500);
+  }
+
+  if (!cartItems || cartItems.length === 0) {
+    return c.json<ApiResponse>({ success: false, error: '购物车为空' }, 400);
+  }
+
+  // 2. Calculate total
+  const totalAmount = cartItems.reduce((sum, item) => {
+    return sum + (item.product?.price || 0) * item.quantity;
+  }, 0);
+
+  // 3. Check balance (use admin to bypass RLS for financial operations)
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from('profiles')
+    .select('balance')
+    .eq('id', userId)
+    .single();
+
+  if (profileError || !profile) {
+    return c.json<ApiResponse>({ success: false, error: '获取用户信息失败' }, 500);
+  }
+
+  if (profile.balance < totalAmount) {
+    return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
+  }
+
+  // 4. Create order
+  const orderNo = generateOrderNo();
+  const { data: order, error: orderError } = await supabaseAdmin
+    .from('orders')
+    .insert({
+      order_no: orderNo,
+      user_id: userId,
+      total_amount: totalAmount,
+      status: '已完成'
+    })
+    .select()
+    .single();
+
+  if (orderError) {
+    return c.json<ApiResponse>({ success: false, error: orderError.message }, 500);
+  }
+
+  // 5. Create order items
+  const orderItems = cartItems.map(item => ({
+    order_id: order.id,
+    product_id: item.product_id,
+    product_name: item.product?.name || 'Unknown',
+    price: item.product?.price || 0,
+    quantity: item.quantity
+  }));
+
+  await supabaseAdmin.from('order_items').insert(orderItems);
+
+  // 6. Deduct balance
+  await supabaseAdmin
+    .from('profiles')
+    .update({ balance: profile.balance - totalAmount, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+
+  // 7. Grant user_assets
+  const assets = cartItems.map(item => ({
+    user_id: userId,
+    product_id: item.product_id,
+    order_id: order.id,
+    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
+  }));
+
+  await supabaseAdmin.from('user_assets').upsert(assets, { onConflict: 'user_id,product_id' });
+
+  // 8. Clear cart
+  await supabase.from('cart_items').delete().eq('user_id', userId);
+
+  return c.json<ApiResponse>({
+    success: true,
+    data: { ...order, items: orderItems, new_balance: profile.balance - totalAmount },
+    message: '支付成功！资源已发放至您的仓库。'
+  }, 201);
+});
+
+/**
+ * POST /api/orders/direct
+ * Direct purchase a single product (立即支付)
+ */
+orders.post('/direct', async (c) => {
+  const userId = c.get('userId');
+  const token = c.get('accessToken');
+  const body = await c.req.json<DirectBuyBody>();
+
+  if (!body.product_id) {
+    return c.json<ApiResponse>({ success: false, error: '商品ID不能为空' }, 400);
+  }
+
+  // Get product
+  const supabase = createSupabaseClient(token);
+  const { data: product, error: productError } = await supabase
+    .from('products')
+    .select('id, name, price')
+    .eq('id', body.product_id)
+    .eq('status', 'active')
+    .single();
+
+  if (productError || !product) {
+    return c.json<ApiResponse>({ success: false, error: '商品不存在' }, 404);
+  }
+
+  // Check balance
+  const { data: profile } = await supabaseAdmin
+    .from('profiles')
+    .select('balance')
+    .eq('id', userId)
+    .single();
+
+  if (!profile || profile.balance < product.price) {
+    return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
+  }
+
+  // Create order
+  const orderNo = generateOrderNo();
+  const { data: order, error: orderError } = await supabaseAdmin
+    .from('orders')
+    .insert({
+      order_no: orderNo,
+      user_id: userId,
+      total_amount: product.price,
+      status: '已完成'
+    })
+    .select()
+    .single();
+
+  if (orderError) {
+    return c.json<ApiResponse>({ success: false, error: orderError.message }, 500);
+  }
+
+  // Create order item
+  await supabaseAdmin.from('order_items').insert({
+    order_id: order.id,
+    product_id: product.id,
+    product_name: product.name,
+    price: product.price,
+    quantity: 1
+  });
+
+  // Deduct balance
+  const newBalance = profile.balance - product.price;
+  await supabaseAdmin
+    .from('profiles')
+    .update({ balance: newBalance, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+
+  // Grant asset
+  await supabaseAdmin.from('user_assets').upsert({
+    user_id: userId,
+    product_id: product.id,
+    order_id: order.id,
+    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
+  }, { onConflict: 'user_id,product_id' });
+
+  return c.json<ApiResponse>({
+    success: true,
+    data: { order, new_balance: newBalance },
+    message: '支付成功！资源已发放至您的仓库。'
+  }, 201);
+});
+
+export default orders;
