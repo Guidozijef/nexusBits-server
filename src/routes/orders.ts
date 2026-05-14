@@ -164,7 +164,7 @@ orders.post('/direct', async (c) => {
   const supabase = createSupabaseClient(token);
   const { data: product, error: productError } = await supabase
     .from('products')
-    .select('id, name, price')
+    .select('id, name, price, types, packages, durations')
     .eq('id', body.product_id)
     .eq('status', 'active')
     .single();
@@ -173,6 +173,35 @@ orders.post('/direct', async (c) => {
     return c.json<ApiResponse>({ success: false, error: '商品不存在' }, 404);
   }
 
+  // Compute price based on variants
+  const qty = body.quantity || 1;
+  let unitPrice = product.price;
+  let pkgName = null;
+  let durName = null;
+  let typeName = null;
+
+  if (body.type_idx !== undefined && product.types && product.types[body.type_idx]) {
+    typeName = product.types[body.type_idx];
+  }
+
+  if (body.pkg_id && product.packages) {
+    const pkg = (product.packages as any[]).find((p: any) => p.id === body.pkg_id);
+    if (pkg) {
+      unitPrice = pkg.price;
+      pkgName = pkg.name;
+    }
+  }
+
+  if (body.dur_id && product.durations) {
+    const dur = (product.durations as any[]).find((d: any) => d.id === body.dur_id);
+    if (dur) {
+      unitPrice += dur.price_modifier;
+      durName = dur.name;
+    }
+  }
+
+  const totalAmount = unitPrice * qty;
+
   // Check balance
   const { data: profile } = await supabaseAdmin
     .from('profiles')
@@ -180,7 +209,7 @@ orders.post('/direct', async (c) => {
     .eq('id', userId)
     .single();
 
-  if (!profile || profile.balance < product.price) {
+  if (!profile || profile.balance < totalAmount) {
     return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
   }
 
@@ -191,7 +220,7 @@ orders.post('/direct', async (c) => {
     .insert({
       order_no: orderNo,
       user_id: userId,
-      total_amount: product.price,
+      total_amount: totalAmount,
       status: '已完成'
     })
     .select()
@@ -206,12 +235,15 @@ orders.post('/direct', async (c) => {
     order_id: order.id,
     product_id: product.id,
     product_name: product.name,
-    price: product.price,
-    quantity: 1
+    price: unitPrice,
+    quantity: qty,
+    package_name: pkgName,
+    duration_name: durName,
+    variant_type: typeName
   });
 
   // Deduct balance
-  const newBalance = profile.balance - product.price;
+  const newBalance = profile.balance - totalAmount;
   await supabaseAdmin
     .from('profiles')
     .update({ balance: newBalance, updated_at: new Date().toISOString() })

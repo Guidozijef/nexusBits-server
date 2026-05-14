@@ -39,6 +39,22 @@ export interface Category {
   sort_order: number;
 }
 
+// --- Product Variants ---
+export interface ProductPackage {
+  id: number;
+  name: string;
+  price: number;
+  features: string[];
+  recommended?: boolean;
+}
+
+export interface ProductDuration {
+  id: number;
+  name: string;
+  price_modifier: number;
+  tag?: string;
+}
+
 // --- Product ---
 export interface Product {
   id: number;
@@ -62,6 +78,9 @@ export interface Product {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  types?: string[] | null;
+  packages?: ProductPackage[] | null;
+  durations?: ProductDuration[] | null;
   // Joined fields
   category?: Category;
 }
@@ -100,10 +119,17 @@ export interface OrderItem {
   product_name: string;
   price: number;
   quantity: number;
+  package_name?: string | null;
+  duration_name?: string | null;
+  variant_type?: string | null;
 }
 
 export interface DirectBuyBody {
   product_id: number;
+  quantity?: number;
+  pkg_id?: number;
+  dur_id?: number;
+  type_idx?: number;
 }
 
 // --- Recharge ---
