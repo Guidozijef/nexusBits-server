@@ -187,6 +187,9 @@ orders.post('/direct', async (c) => {
   if (body.pkg_id && product.packages) {
     const pkg = (product.packages as any[]).find((p: any) => p.id === body.pkg_id);
     if (pkg) {
+      if (pkg.type_idxs && body.type_idx !== undefined && !pkg.type_idxs.includes(body.type_idx)) {
+        return c.json<ApiResponse>({ success: false, error: '安全拦截：该套餐不适用于当前选择的类型组合' }, 400);
+      }
       unitPrice = pkg.price;
       pkgName = pkg.name;
     }
@@ -195,6 +198,9 @@ orders.post('/direct', async (c) => {
   if (body.dur_id && product.durations) {
     const dur = (product.durations as any[]).find((d: any) => d.id === body.dur_id);
     if (dur) {
+      if (dur.pkg_ids && body.pkg_id !== undefined && !dur.pkg_ids.includes(body.pkg_id)) {
+        return c.json<ApiResponse>({ success: false, error: '安全拦截：该时长选项不适用于当前选择的套餐' }, 400);
+      }
       unitPrice += dur.price_modifier;
       durName = dur.name;
     }

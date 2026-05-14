@@ -46,6 +46,7 @@ export interface ProductPackage {
   price: number;
   features: string[];
   recommended?: boolean;
+  type_idxs?: number[];
 }
 
 export interface ProductDuration {
@@ -53,6 +54,7 @@ export interface ProductDuration {
   name: string;
   price_modifier: number;
   tag?: string;
+  pkg_ids?: number[];
 }
 
 // --- Product ---

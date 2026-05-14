@@ -16,18 +16,20 @@ ALTER TABLE order_items
   ADD COLUMN IF NOT EXISTS variant_type VARCHAR(200);
 
 -- 3. Populate existing products with default variant data
--- We will use the exact JSON structures that were previously mocked in the frontend
+-- Utilizing hierarchical relational filters (type_idxs and pkg_ids)
 UPDATE products 
 SET 
-  types = '["账号", "代充", "家庭组账号", "下载号"]'::jsonb,
+  types = '["标准账号", "高级代充"]'::jsonb,
   packages = '[
-    { "id": 1, "name": "基础版", "price": 38, "features": ["标准响应速度", "支持基础模型", "无并发支持"] },
-    { "id": 2, "name": "Pro 进阶版", "price": 178, "features": ["优先响应速度", "支持高级模型 (GPT-4等)", "支持插件生态", "高并发额度"], "recommended": true },
-    { "id": 3, "name": "Ultra 旗舰版", "price": 599, "features": ["极速专属通道", "所有顶级模型首发访问", "无限量使用", "专属一对一客服支持"] }
+    { "id": 1, "name": "基础版", "price": 38, "features": ["标准响应", "支持基础模型", "无并发支持"], "type_idxs": [0] },
+    { "id": 2, "name": "Pro 进阶版", "price": 178, "features": ["优先响应", "支持高级模型", "支持插件生态"], "recommended": true, "type_idxs": [0] },
+    { "id": 3, "name": "代充专属套餐", "price": 299, "features": ["极速到账", "安全质保", "1v1专属客服"], "type_idxs": [1] },
+    { "id": 4, "name": "通用旗舰至尊版", "price": 999, "features": ["全类型通用", "无限量使用", "附赠全部资产"] }
   ]'::jsonb,
   durations = '[
-    { "id": 1, "name": "12个月(优惠质保30天)", "price_modifier": 10 },
-    { "id": 2, "name": "12个月(学生优惠质保20天)", "price_modifier": 0 },
-    { "id": 3, "name": "30天(全程质保)", "price_modifier": 21, "tag": "热门" }
+    { "id": 1, "name": "1个月 (试用)", "price_modifier": 0, "pkg_ids": [1] },
+    { "id": 2, "name": "12个月 (优惠质保30天)", "price_modifier": 10, "pkg_ids": [1, 2] },
+    { "id": 3, "name": "单次直充", "price_modifier": 0, "pkg_ids": [3] },
+    { "id": 4, "name": "终身全程质保", "price_modifier": 50, "tag": "热门" }
   ]'::jsonb
 WHERE id > 0;
