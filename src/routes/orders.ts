@@ -137,7 +137,7 @@ orders.post('/', async (c) => {
     remark: `系统自动生成备注：授权成功！您购买的《${item.product?.name || '虚拟商品'}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
   }));
 
-  await supabaseAdmin.from('user_assets').upsert(assets, { onConflict: 'user_id,product_id' });
+  await supabaseAdmin.from('user_assets').insert(assets);
 
   // 8. Clear cart
   await supabase.from('cart_items').delete().eq('user_id', userId);
@@ -258,13 +258,13 @@ orders.post('/direct', async (c) => {
     .eq('id', userId);
 
   // Grant asset
-  await supabaseAdmin.from('user_assets').upsert({
+  await supabaseAdmin.from('user_assets').insert({
     user_id: userId,
     product_id: product.id,
     order_id: order.id,
     license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
     remark: `系统自动生成备注：授权成功！您购买的《${product.name}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
-  }, { onConflict: 'user_id,product_id' });
+  });
 
   return c.json<ApiResponse>({
     success: true,

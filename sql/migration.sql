@@ -328,15 +328,36 @@ CREATE TABLE IF NOT EXISTS user_assets (
   order_id INT REFERENCES orders(id),
   license_key VARCHAR(255),
   remark TEXT,
-  acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(user_id, product_id)
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Add column to existing table if schema was already created
 ALTER TABLE user_assets ADD COLUMN IF NOT EXISTS remark TEXT;
 
+-- Drop the old unique constraint to allow multiple purchases of the same product (matching order count)
+ALTER TABLE user_assets DROP CONSTRAINT IF EXISTS user_assets_user_id_product_id_key;
+
 ALTER TABLE user_assets ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own assets" ON user_assets FOR SELECT USING (auth.uid() = user_id);
+
+-- Data Migration: Reconstruct missing user assets for old completed orders
+INSERT INTO user_assets (user_id, product_id, order_id, remark, acquired_at)
+SELECT 
+  o.user_id,
+  oi.product_id,
+  o.id as order_id,
+  '历史订单迁移数据：系统自动补齐授权交付信息。' as remark,
+  o.created_at as acquired_at
+FROM order_items oi
+JOIN orders o ON oi.order_id = o.id
+WHERE o.status = '已完成'
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM user_assets ua 
+    WHERE ua.user_id = o.user_id 
+      AND ua.product_id = oi.product_id 
+      AND ua.order_id = o.id
+  );
 
 
 -- ============================================
