@@ -49,7 +49,7 @@ products.get('/', async (c) => {
 
   return c.json<PaginatedResponse<Product>>({
     success: true,
-    data: data || [],
+    data: (data as any) || [],
     total: count || 0,
     page,
     limit

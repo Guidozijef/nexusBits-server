@@ -115,7 +115,8 @@ app.post('/products', async (c) => {
       packages: body.packages,
       durations: body.durations,
       notices: body.notices,
-      admin_note: body.admin_note
+      admin_note: body.admin_note,
+      cost: body.cost || 0
     }])
     .select()
     .single();
@@ -159,6 +160,7 @@ app.put('/products/:id', async (c) => {
       durations: body.durations,
       notices: body.notices,
       admin_note: body.admin_note,
+      cost: body.cost,
       updated_at: new Date().toISOString()
     })
     .eq('id', id)

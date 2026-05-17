@@ -86,6 +86,7 @@ export interface Product {
   durations?: ProductDuration[] | null;
   notices?: string[] | null;
   admin_note?: string | null;
+  cost?: number;
   // Joined fields
   category?: Category;
 }
