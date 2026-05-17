@@ -269,4 +269,149 @@ app.delete('/categories/:id', async (c) => {
   return c.json({ success: true });
 });
 
+// --- Order Management ---
+
+// Get all orders with filtering and pagination
+app.get('/orders', async (c) => {
+  const supabase = createSupabaseClient(c.get('accessToken'));
+  const { order_no, search, page = '1', limit = '10' } = c.req.query();
+  
+  const from = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const to = from + parseInt(limit, 10) - 1;
+
+  let userIds: string[] = [];
+  if (search) {
+    // Look up users matching search term (email or display name)
+    const { data: matchedUsers } = await supabase
+      .from('profiles')
+      .select('id')
+      .or(`email.ilike.%${search}%,display_name.ilike.%${search}%`);
+    if (matchedUsers && matchedUsers.length > 0) {
+      userIds = matchedUsers.map(u => u.id);
+    }
+  }
+
+  let query = supabase
+    .from('orders')
+    .select(`
+      *,
+      items:order_items(*)
+    `, { count: 'exact' });
+
+  if (order_no) {
+    query = query.ilike('order_no', `%${order_no}%`);
+  }
+
+  if (search) {
+    if (userIds.length > 0) {
+      query = query.or(`user_id.in.(${userIds.join(',')}),order_no.ilike.%${search}%`);
+    } else {
+      query = query.ilike('order_no', `%${search}%`);
+    }
+  }
+
+  const { data: orders, error, count } = await query
+    .order('created_at', { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    return c.json({ success: false, error: error.message }, 500);
+  }
+
+  // Load and merge profiles and user_assets in-memory
+  if (orders && orders.length > 0) {
+    const uniqueUserIds = [...new Set(orders.map(o => o.user_id))];
+    const orderIds = orders.map(o => o.id);
+
+    // Concurrently fetch profiles and assets in separate clean queries
+    const [profilesResult, assetsResult] = await Promise.all([
+      supabase.from('profiles').select('id, display_name, email, avatar_url').in('id', uniqueUserIds),
+      supabase.from('user_assets').select('*').in('order_id', orderIds)
+    ]);
+
+    const profiles = profilesResult.data || [];
+    const assets = assetsResult.data || [];
+
+    orders.forEach((order: any) => {
+      // Bind profile in-memory
+      order.profile = profiles.find(p => p.id === order.user_id) || null;
+
+      // Bind assets in-memory to items
+      order.items = order.items.map((item: any) => {
+        const asset = assets.find(a => a.product_id === item.product_id && a.order_id === order.id);
+        return {
+          ...item,
+          asset_id: asset?.id || null,
+          remark: asset?.remark || ''
+        };
+      });
+    });
+  }
+
+  return c.json({ success: true, data: orders, total: count });
+});
+
+// Update or create remark for a purchased product in an order
+app.put('/orders/:orderId/products/:productId/remark', async (c) => {
+  const supabase = createSupabaseClient(c.get('accessToken'));
+  const orderId = parseInt(c.req.param('orderId'), 10);
+  const productId = parseInt(c.req.param('productId'), 10);
+  const { remark } = await c.req.json();
+
+  // 1. Fetch order details to retrieve user_id
+  const { data: order, error: orderErr } = await supabase
+    .from('orders')
+    .select('user_id')
+    .eq('id', orderId)
+    .single();
+
+  if (orderErr || !order) {
+    return c.json({ success: false, error: '未找到该订单信息' }, 404);
+  }
+
+  // 2. Check if a user_asset record already exists for this order + product
+  const { data: existingAsset } = await supabase
+    .from('user_assets')
+    .select('id')
+    .eq('order_id', orderId)
+    .eq('product_id', productId)
+    .maybeSingle();
+
+  let result;
+  if (existingAsset) {
+    // Update existing remark
+    result = await supabase
+      .from('user_assets')
+      .update({ remark, acquired_at: new Date().toISOString() })
+      .eq('id', existingAsset.id)
+      .select()
+      .single();
+  } else {
+    // Reconstruct asset if missing
+    result = await supabase
+      .from('user_assets')
+      .insert([{
+        user_id: order.user_id,
+        product_id: productId,
+        order_id: orderId,
+        remark: remark,
+        license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
+      }])
+      .select()
+      .single();
+  }
+
+  if (result.error) {
+    return c.json({ success: false, error: result.error.message }, 500);
+  }
+
+  // 3. Automatically update the order status to '已完成' since remarks/delivery info is updated
+  await supabase
+    .from('orders')
+    .update({ status: '已完成', updated_at: new Date().toISOString() })
+    .eq('id', orderId);
+
+  return c.json({ success: true, data: result.data });
+});
+
 export default app;

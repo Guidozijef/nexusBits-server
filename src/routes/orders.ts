@@ -102,7 +102,7 @@ orders.post('/', async (c) => {
       order_no: orderNo,
       user_id: userId,
       total_amount: totalAmount,
-      status: '已完成'
+      status: '处理中'
     })
     .select()
     .single();
@@ -229,7 +229,7 @@ orders.post('/direct', async (c) => {
       order_no: orderNo,
       user_id: userId,
       total_amount: totalAmount,
-      status: '已完成'
+      status: '处理中'
     })
     .select()
     .single();

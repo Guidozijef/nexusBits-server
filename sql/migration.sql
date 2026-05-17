@@ -291,10 +291,15 @@ CREATE TABLE IF NOT EXISTS orders (
   order_no VARCHAR(50) NOT NULL UNIQUE,
   user_id UUID NOT NULL REFERENCES auth.users(id),
   total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-  status VARCHAR(20) NOT NULL DEFAULT '已完成' CHECK (status IN ('待支付', '已完成', '已过期', '已取消')),
+  status VARCHAR(20) NOT NULL DEFAULT '处理中' CHECK (status IN ('待支付', '处理中', '已完成', '已过期', '已取消')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Modify existing status constraint and default value for orders table
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待支付', '处理中', '已完成', '已过期', '已取消'));
+ALTER TABLE orders ALTER COLUMN status SET DEFAULT '处理中';
 
 CREATE TABLE IF NOT EXISTS order_items (
   id SERIAL PRIMARY KEY,
