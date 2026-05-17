@@ -20,6 +20,7 @@ export interface Profile {
   display_name: string;
   avatar_url: string | null;
   level: string;
+  role: string;
   balance: number;
   email: string | null;
   created_at: string;

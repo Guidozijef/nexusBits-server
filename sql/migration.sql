@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   display_name VARCHAR(100) NOT NULL DEFAULT '匿名用户',
   avatar_url TEXT,
   level VARCHAR(50) NOT NULL DEFAULT '标准',
+  role VARCHAR(50) NOT NULL DEFAULT 'user',
   balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
   email VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -8,6 +8,7 @@ import categoryRoutes from './routes/categories';
 import cartRoutes from './routes/cart';
 import orderRoutes from './routes/orders';
 import userRoutes from './routes/user';
+import adminRoutes from './routes/admin';
 
 const app = new Hono();
 
@@ -38,6 +39,7 @@ app.route('/api/categories', categoryRoutes);
 app.route('/api/cart', cartRoutes);
 app.route('/api/orders', orderRoutes);
 app.route('/api/user', userRoutes);
+app.route('/api/admin', adminRoutes);
 
 // ---- 404 Handler ----
 app.notFound((c) => {
