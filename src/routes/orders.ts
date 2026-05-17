@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import crypto from 'crypto';
 import { createSupabaseClient, supabaseAdmin } from '../lib/supabase';
 import { authMiddleware } from '../middleware/auth';
 import type { ApiResponse, PaginatedResponse, Order, DirectBuyBody, Variables } from '../types';
@@ -9,11 +10,11 @@ const orders = new Hono<{ Variables: Variables }>();
 orders.use('*', authMiddleware);
 
 /**
- * Generate a unique order number like "#NXB-77291A"
+ * Generate a unique order number using UUID (e.g. NXB-7B8B1A2C9C4D4E3F8F1A2B3C4D5E6F7A)
  */
 function generateOrderNo(): string {
-  const hex = Math.random().toString(16).substring(2, 8).toUpperCase();
-  return `#NXB-${hex}`;
+  const uuid = crypto.randomUUID().replace(/-/g, '').toUpperCase();
+  return `#NXB-${uuid}`;
 }
 
 /**
@@ -132,7 +133,8 @@ orders.post('/', async (c) => {
     user_id: userId,
     product_id: item.product_id,
     order_id: order.id,
-    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
+    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+    remark: `系统自动生成备注：授权成功！您购买的《${item.product?.name || '虚拟商品'}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
   }));
 
   await supabaseAdmin.from('user_assets').upsert(assets, { onConflict: 'user_id,product_id' });
@@ -260,7 +262,8 @@ orders.post('/direct', async (c) => {
     user_id: userId,
     product_id: product.id,
     order_id: order.id,
-    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
+    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+    remark: `系统自动生成备注：授权成功！您购买的《${product.name}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
   }, { onConflict: 'user_id,product_id' });
 
   return c.json<ApiResponse>({

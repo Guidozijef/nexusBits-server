@@ -327,9 +327,13 @@ CREATE TABLE IF NOT EXISTS user_assets (
   product_id INT NOT NULL REFERENCES products(id),
   order_id INT REFERENCES orders(id),
   license_key VARCHAR(255),
+  remark TEXT,
   acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, product_id)
 );
+
+-- Add column to existing table if schema was already created
+ALTER TABLE user_assets ADD COLUMN IF NOT EXISTS remark TEXT;
 
 ALTER TABLE user_assets ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own assets" ON user_assets FOR SELECT USING (auth.uid() = user_id);
