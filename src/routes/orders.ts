@@ -203,7 +203,7 @@ orders.post('/direct', async (c) => {
       if (dur.pkg_ids && body.pkg_id !== undefined && !dur.pkg_ids.includes(body.pkg_id)) {
         return c.json<ApiResponse>({ success: false, error: '安全拦截：该时长选项不适用于当前选择的套餐' }, 400);
       }
-      unitPrice += dur.price_modifier;
+      unitPrice = dur.price_modifier;
       durName = dur.name;
     }
   }

@@ -69,7 +69,7 @@ products.get('/featured', async (c) => {
     .select(`${PUBLIC_PRODUCT_FIELDS}, category:categories(id, name, slug)`)
     .eq('status', 'active')
     .eq('is_featured', true)
-    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
   if (error) {
