@@ -4,6 +4,8 @@ import type { ApiResponse, PaginatedResponse, Product, Variables } from '../type
 
 const products = new Hono<{ Variables: Variables }>();
 
+const PUBLIC_PRODUCT_FIELDS = 'id, name, description, long_description, price, currency, category_id, tag, image_url, thumbnail_urls, file_format, file_size, asset_type, polygon_count, license_type, update_policy, status, is_featured, sort_order, created_at, updated_at, types, packages, durations, notices';
+
 /**
  * GET /api/products
  * List products with pagination, category filter, and search
@@ -21,7 +23,7 @@ products.get('/', async (c) => {
   // Build query
   let query = supabase
     .from('products')
-    .select('*, category:categories(id, name, slug)', { count: 'exact' })
+    .select(`${PUBLIC_PRODUCT_FIELDS}, category:categories(id, name, slug)`, { count: 'exact' })
     .eq('status', 'active')
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: false });
@@ -64,7 +66,7 @@ products.get('/featured', async (c) => {
 
   const { data, error } = await supabase
     .from('products')
-    .select('*, category:categories(id, name, slug)')
+    .select(`${PUBLIC_PRODUCT_FIELDS}, category:categories(id, name, slug)`)
     .eq('status', 'active')
     .eq('is_featured', true)
     .order('sort_order', { ascending: true })
@@ -123,7 +125,7 @@ products.get('/:id', async (c) => {
 
   const { data, error } = await supabase
     .from('products')
-    .select('*, category:categories(id, name, slug)')
+    .select(`${PUBLIC_PRODUCT_FIELDS}, category:categories(id, name, slug)`)
     .eq('id', id)
     .eq('status', 'active')
     .single();

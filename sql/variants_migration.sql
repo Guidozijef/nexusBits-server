@@ -8,7 +8,8 @@ ALTER TABLE products
   ADD COLUMN IF NOT EXISTS types JSONB,
   ADD COLUMN IF NOT EXISTS packages JSONB,
   ADD COLUMN IF NOT EXISTS durations JSONB,
-  ADD COLUMN IF NOT EXISTS notices JSONB;
+  ADD COLUMN IF NOT EXISTS notices JSONB,
+  ADD COLUMN IF NOT EXISTS admin_note TEXT;
 
 -- 2. Add variant recording columns to `order_items` table
 ALTER TABLE order_items

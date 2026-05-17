@@ -59,6 +59,27 @@ app.get('/products', async (c) => {
   return c.json({ success: true, data, total: count });
 });
 
+// Get single product for editing (includes admin_note)
+app.get('/products/:id', async (c) => {
+  const supabase = createSupabaseClient(c.get('accessToken'));
+  const id = c.req.param('id');
+  
+  const { data, error } = await supabase
+    .from('products')
+    .select(`
+      *,
+      category:categories(id, name)
+    `)
+    .eq('id', id)
+    .single();
+
+  if (error || !data) {
+    return c.json({ success: false, error: error?.message || '商品不存在' }, 404);
+  }
+
+  return c.json({ success: true, data });
+});
+
 // Create product
 app.post('/products', async (c) => {
   const supabase = createSupabaseClient(c.get('accessToken'));
@@ -93,7 +114,8 @@ app.post('/products', async (c) => {
       types: body.types,
       packages: body.packages,
       durations: body.durations,
-      notices: body.notices
+      notices: body.notices,
+      admin_note: body.admin_note
     }])
     .select()
     .single();
@@ -136,6 +158,7 @@ app.put('/products/:id', async (c) => {
       packages: body.packages,
       durations: body.durations,
       notices: body.notices,
+      admin_note: body.admin_note,
       updated_at: new Date().toISOString()
     })
     .eq('id', id)
