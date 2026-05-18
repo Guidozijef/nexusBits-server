@@ -299,7 +299,7 @@ app.delete('/categories/:id', async (c) => {
 // Get all orders with filtering and pagination
 app.get('/orders', async (c) => {
   const supabase = createSupabaseClient(c.get('accessToken'));
-  const { order_no, search, page = '1', limit = '10' } = c.req.query();
+  const { order_no, search, status, page = '1', limit = '10' } = c.req.query();
   
   const from = (parseInt(page, 10) - 1) * parseInt(limit, 10);
   const to = from + parseInt(limit, 10) - 1;
@@ -327,6 +327,10 @@ app.get('/orders', async (c) => {
     query = query.ilike('order_no', `%${order_no}%`);
   }
 
+  if (status) {
+    query = query.eq('status', status);
+  }
+
   if (search) {
     if (userIds.length > 0) {
       query = query.or(`user_id.in.(${userIds.join(',')}),order_no.ilike.%${search}%`);
@@ -343,31 +347,48 @@ app.get('/orders', async (c) => {
     return c.json({ success: false, error: error.message }, 500);
   }
 
-  // Load and merge profiles and user_assets in-memory
+  // Load and merge profiles, user_assets and product admin_notes in-memory
   if (orders && orders.length > 0) {
     const uniqueUserIds = [...new Set(orders.map(o => o.user_id))];
     const orderIds = orders.map(o => o.id);
+    
+    // Extract unique product IDs from order items
+    const productIds: number[] = [];
+    orders.forEach((o: any) => {
+      if (o.items) {
+        o.items.forEach((item: any) => {
+          if (item.product_id) {
+            productIds.push(item.product_id);
+          }
+        });
+      }
+    });
+    const uniqueProductIds = [...new Set(productIds)];
 
-    // Concurrently fetch profiles and assets in separate clean queries
-    const [profilesResult, assetsResult] = await Promise.all([
+    // Concurrently fetch profiles, assets and product notes in separate clean queries
+    const [profilesResult, assetsResult, productsResult] = await Promise.all([
       supabase.from('profiles').select('id, display_name, email, avatar_url').in('id', uniqueUserIds),
-      supabase.from('user_assets').select('*').in('order_id', orderIds)
+      supabase.from('user_assets').select('*').in('order_id', orderIds),
+      supabase.from('products').select('id, admin_note').in('id', uniqueProductIds)
     ]);
 
     const profiles = profilesResult.data || [];
     const assets = assetsResult.data || [];
+    const products = productsResult.data || [];
 
     orders.forEach((order: any) => {
       // Bind profile in-memory
       order.profile = profiles.find(p => p.id === order.user_id) || null;
 
-      // Bind assets in-memory to items
+      // Bind assets and product notes in-memory to items
       order.items = order.items.map((item: any) => {
         const asset = assets.find(a => a.product_id === item.product_id && a.order_id === order.id);
+        const product = products.find(p => p.id === item.product_id);
         return {
           ...item,
           asset_id: asset?.id || null,
-          remark: asset?.remark || ''
+          remark: asset?.remark || '',
+          product_admin_note: product?.admin_note || ''
         };
       });
     });
