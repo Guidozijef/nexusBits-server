@@ -10,11 +10,14 @@ const orders = new Hono<{ Variables: Variables }>();
 orders.use('*', authMiddleware);
 
 /**
- * Generate a unique order number using UUID (e.g. NXB-7B8B1A2C9C4D4E3F8F1A2B3C4D5E6F7A)
+ * Generate a unique, compact 10-character uppercase alphanumeric order number (e.g., 7G7S20ABCD)
+ * Milliseconds since custom epoch in base-36 (6 chars) + Random entropy (4 chars)
  */
 function generateOrderNo(): string {
-  const uuid = crypto.randomUUID().replace(/-/g, '').toUpperCase();
-  return `#NXB-${uuid}`;
+  const offset = Date.now() - 1767225600000;
+  const timePart = offset.toString(36).toUpperCase().slice(-6);
+  const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase().padEnd(4, 'X');
+  return `${timePart}${randomPart}`.substring(0, 10);
 }
 
 /**
