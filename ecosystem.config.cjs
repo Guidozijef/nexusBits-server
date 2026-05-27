@@ -46,6 +46,12 @@ module.exports = {
 
         // API 监听的内部端口
         PORT: 3001,
+
+        // 🚨 Supabase 配置 — PM2 启动时 .env 文件的自动加载不可靠，必须在此处显式声明
+        // 请将下方的值替换为您的 Supabase 项目真实密钥
+        SUPABASE_URL: 'https://ysxuyguvsgfqfqqkcsgf.supabase.co',
+        SUPABASE_ANON_KEY: 'sb_publishable_OymCl9ioV61yVXM82ImC9g_7Un5irGc',
+        SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_mjTpFsI015JiI3gSnPZe9w_Nf7Zwc-t',
       },
 
       // ----------------------------------------------------------------------------

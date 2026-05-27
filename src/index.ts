@@ -15,7 +15,7 @@ const app = new Hono();
 // ---- Global Middleware ----
 app.use('*', logger());
 app.use('*', cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000'],
+  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'https://nexus.zijef.xyz', 'http://nexus.zijef.xyz'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -52,6 +52,15 @@ app.onError((err, c) => {
   return c.json({ success: false, error: '服务器内部错误' }, 500);
 });
 
+// ---- 进程级错误兜底，防止未捕获的异常导致 Bun 进程崩溃 (502) ----
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught Exception:', err);
+});
+
 // ---- Start Server ----
 const port = parseInt(process.env.PORT || '3001');
 
@@ -63,7 +72,30 @@ console.log(`
 ╚══════════════════════════════════════════╝
 `);
 
-export default {
+// 🚨 使用 Bun.serve() 显式启动，替代 export default { fetch } 模式
+// export default 模式没有 error 回调，请求处理中任何底层异常都会直接崩溃进程
+const server = Bun.serve({
   port,
-  fetch: app.fetch,
-};
+  // 包裹 app.fetch，确保所有异常都被捕获并返回 500，而非进程崩溃
+  fetch: async (req: Request) => {
+    try {
+      return await app.fetch(req);
+    } catch (err) {
+      console.error('⚠️ Unhandled fetch error:', err);
+      return new Response(
+        JSON.stringify({ success: false, error: '服务器内部错误' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  },
+  // Bun 底层网络/解析错误的兜底回调
+  error(error: Error) {
+    console.error('⚠️ Bun Server Error:', error);
+    return new Response(
+      JSON.stringify({ success: false, error: '服务器错误' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  },
+});
+
+console.log(`✅ Server is listening on ${server.hostname}:${server.port}`);
