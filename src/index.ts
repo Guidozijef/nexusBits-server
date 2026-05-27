@@ -1,6 +1,8 @@
+import 'dotenv/config';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { serve } from '@hono/node-server';
 
 import authRoutes from './routes/auth';
 import productRoutes from './routes/products';
@@ -52,7 +54,7 @@ app.onError((err, c) => {
   return c.json({ success: false, error: '服务器内部错误' }, 500);
 });
 
-// ---- 进程级错误兜底，防止未捕获的异常导致 Bun 进程崩溃 (502) ----
+// ---- 进程级错误兜底 ----
 process.on('unhandledRejection', (reason, promise) => {
   console.error('⚠️ Unhandled Rejection at:', promise, 'reason:', reason);
 });
@@ -61,41 +63,23 @@ process.on('uncaughtException', (err) => {
   console.error('⚠️ Uncaught Exception:', err);
 });
 
-// ---- Start Server ----
+// ---- Start Server (Node.js) ----
 const port = parseInt(process.env.PORT || '3001');
 
 console.log(`
 ╔══════════════════════════════════════════╗
 ║       🚀 NexusBits API Server           ║
-║       Running on port ${port}              ║
-║       http://localhost:${port}              ║
+║       Runtime: Node.js                  ║
+║       Port: ${port}                          ║
 ╚══════════════════════════════════════════╝
 `);
 
-// 🚨 使用 Bun.serve() 显式启动，替代 export default { fetch } 模式
-// export default 模式没有 error 回调，请求处理中任何底层异常都会直接崩溃进程
-const server = Bun.serve({
+// 使用 @hono/node-server 启动 — 基于 Node.js 的稳定 HTTP 实现
+// 替代 Bun.serve()，解决 Bun 原生 TLS 在 Linux 上的 segfault 崩溃问题
+serve({
+  fetch: app.fetch,
   port,
-  // 包裹 app.fetch，确保所有异常都被捕获并返回 500，而非进程崩溃
-  fetch: async (req: Request) => {
-    try {
-      return await app.fetch(req);
-    } catch (err) {
-      console.error('⚠️ Unhandled fetch error:', err);
-      return new Response(
-        JSON.stringify({ success: false, error: '服务器内部错误' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-  },
-  // Bun 底层网络/解析错误的兜底回调
-  error(error: Error) {
-    console.error('⚠️ Bun Server Error:', error);
-    return new Response(
-      JSON.stringify({ success: false, error: '服务器错误' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  },
+}, (info) => {
+  console.log(`✅ Server is listening on http://localhost:${info.port}`);
 });
 
-console.log(`✅ Server is listening on ${server.hostname}:${server.port}`);
