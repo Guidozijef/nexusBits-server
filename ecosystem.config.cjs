@@ -16,12 +16,12 @@ module.exports = {
       // 🚨 强制指定工作目录为服务器上项目的绝对路径，防止在不同目录下执行 pm2 命令导致找不到文件
       cwd: '/root/nexusBits-server',
 
-      // 🚨 使用 Node.js（通过 tsx）运行，替代 Bun
-      // Bun 的原生 TLS 实现在 Linux 上存在 segfault 崩溃问题，导致 502
-      script: 'node_modules/tsx/dist/cli.mjs',
+      // 🚨 入口脚本路径 (Entry script path)
+      script: 'src/index.ts',
 
-      // 🚨 传递给 tsx 运行程序的参数，等价于手动执行 `npx tsx src/index.ts`
-      args: 'src/index.ts',
+      // 🚨 指定使用 Node.js 作为解释器，并加载 tsx 模块 (Specify node as interpreter and load tsx module)
+      interpreter: 'node',
+      interpreter_args: '--loader tsx',
 
       // 执行模式：由于 Bun 对 PM2 cluster 集群模式支持尚不完善，此处采用 'fork' 模式运行
       exec_mode: 'fork',
