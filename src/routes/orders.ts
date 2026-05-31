@@ -9,13 +9,18 @@ const orders = new Hono<{ Variables: Variables }>();
 orders.use('*', authMiddleware);
 
 /**
- * 随机生成紧凑的 10 位大写字母数字订单号 (例如: 7G7S20ABCD)
+ * 生成包含品牌前缀的唯一订单号。
+ * 格式为: #NXB-时戳部分(6位大写36进制) + 随机部分(4位大写36进制)
+ * 示例: #NXB-7G7S20ABCD
+ *
+ * @returns 格式化后的唯一订单号字符串
  */
 function generateOrderNo(): string {
   const offset = Date.now() - 1767225600000;
   const timePart = offset.toString(36).toUpperCase().slice(-6);
   const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase().padEnd(4, 'X');
-  return `${timePart}${randomPart}`.substring(0, 10);
+  const uniqueCode = `${timePart}${randomPart}`.substring(0, 10);
+  return `#NXB-${uniqueCode}`;
 }
 
 /**
