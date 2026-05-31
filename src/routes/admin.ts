@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware } from '../middleware/admin';
-import { createPocketBaseClient } from '../lib/pocketbase';
+import { createPocketBaseClient, getPocketBaseAdmin } from '../lib/pocketbase';
 import type { Variables } from '../types';
 
 const app = new Hono<{ Variables: Variables }>();
@@ -70,7 +70,8 @@ function mapProductRecord(item: any) {
  * 获取用户列表
  */
 app.get('/users', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端以获取完整的用户列表，避开普通用户的 API Rule 限制
+  const pb = await getPocketBaseAdmin();
   
   try {
     const resultList = await pb.collection('users').getList(1, 100, {
@@ -91,7 +92,8 @@ app.get('/users', async (c) => {
  * 获取所有商品列表（支持按名称、分类和状态筛选）
  */
 app.get('/products', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端查询商品列表（包含草稿、归档商品及内部备注）
+  const pb = await getPocketBaseAdmin();
   const { name, category_id, status } = c.req.query();
   
   const filterList = [];
@@ -125,7 +127,8 @@ app.get('/products', async (c) => {
  * 编辑商品时获取商品详情（包含 admin_note）
  */
 app.get('/products/:id', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端获取商品详情以读取 admin_note 字段
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
   
   try {
@@ -143,7 +146,8 @@ app.get('/products/:id', async (c) => {
  * 创建商品
  */
 app.post('/products', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端创建新商品，规避商品表写入权限限制
+  const pb = await getPocketBaseAdmin();
   const body = await c.req.json();
   
   if (!body.name || !body.price || !body.category_id) {
@@ -189,7 +193,8 @@ app.post('/products', async (c) => {
  * 更新商品
  */
 app.put('/products/:id', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端更新商品信息
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
   const body = await c.req.json();
 
@@ -232,7 +237,8 @@ app.put('/products/:id', async (c) => {
  * 快速更新商品状态
  */
 app.put('/products/:id/status', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端快速更新商品上下架状态
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
   const { status } = await c.req.json();
 
@@ -253,7 +259,8 @@ app.put('/products/:id/status', async (c) => {
  * 删除商品
  */
 app.delete('/products/:id', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端安全删除商品
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
 
   try {
@@ -271,7 +278,8 @@ app.delete('/products/:id', async (c) => {
  * 新增分类
  */
 app.post('/categories', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端新增商品分类
+  const pb = await getPocketBaseAdmin();
   const { name, sort_order } = await c.req.json();
 
   if (!name) {
@@ -297,7 +305,8 @@ app.post('/categories', async (c) => {
  * 修改分类
  */
 app.put('/categories/:id', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端修改分类名称和排序
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
   const { name, sort_order } = await c.req.json();
 
@@ -321,7 +330,8 @@ app.put('/categories/:id', async (c) => {
  * 删除分类（如果分类下有商品，则不允许删除）
  */
 app.delete('/categories/:id', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端删除分类并校验商品引用
+  const pb = await getPocketBaseAdmin();
   const id = c.req.param('id');
 
   try {
@@ -348,7 +358,8 @@ app.delete('/categories/:id', async (c) => {
  * 管理后台获取订单列表（支持分页、按单号/状态筛选，按邮箱/昵称搜索下单人）
  */
 app.get('/orders', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端获取全局订单列表（不受限于当前登录人名下的订单）
+  const pb = await getPocketBaseAdmin();
   const { order_no, search, status, page = '1', limit = '10' } = c.req.query();
   
   const pageNum = parseInt(page, 10);
@@ -458,7 +469,8 @@ app.get('/orders', async (c) => {
  * 管理员为某笔订单中购买的商品更新发货交付信息（备注），并自动将订单状态标记为“已完成”
  */
 app.put('/orders/:orderId/products/:productId/remark', async (c) => {
-  const pb = createPocketBaseClient(c.get('accessToken'));
+  // 使用管理员客户端更新订单备注发货，并同步更新用户资产授权
+  const pb = await getPocketBaseAdmin();
   const orderId = c.req.param('orderId');
   const productId = c.req.param('productId');
   const { remark } = await c.req.json();
