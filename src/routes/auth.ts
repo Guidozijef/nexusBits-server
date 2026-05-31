@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { createPocketBaseClient, getPocketBaseAdmin } from '../lib/pocketbase';
+import { rateLimitMiddleware } from '../middleware/rateLimit';
 import type { RegisterBody, LoginBody, ApiResponse } from '../types';
 
 const auth = new Hono();
@@ -8,7 +9,7 @@ const auth = new Hono();
  * POST /api/auth/register
  * 注册新用户，邮箱和密码，同时自动初始化标准用户的扩展字段
  */
-auth.post('/register', async (c) => {
+auth.post('/register', rateLimitMiddleware(5, 10 * 60 * 1000), async (c) => {
   const body = await c.req.json<RegisterBody>();
   const { email, password, display_name } = body;
 
@@ -16,16 +17,17 @@ auth.post('/register', async (c) => {
     return c.json<ApiResponse>({ success: false, error: '邮箱和密码不能为空' }, 400);
   }
 
-  if (password.length < 6) {
-    return c.json<ApiResponse>({ success: false, error: '密码长度至少6位' }, 400);
+  if (password.length < 8) {
+    return c.json<ApiResponse>({ success: false, error: '密码长度至少8位' }, 400);
   }
 
   const nameToCheck = display_name || email.split('@')[0];
-  const pb = createPocketBaseClient();
 
   try {
-    // 检查邮箱或昵称是否在 PocketBase 中已存在
-    const existing = await pb.collection('users').getList(1, 1, {
+    const pbAdmin = await getPocketBaseAdmin();
+
+    // 使用管理员客户端检查邮箱或昵称是否在 PocketBase 中已存在
+    const existing = await pbAdmin.collection('users').getList(1, 1, {
       filter: `email = "${email}" || name = "${nameToCheck}"`
     });
 
@@ -41,24 +43,21 @@ auth.post('/register', async (c) => {
       }
     }
 
-    // 创建 PocketBase 用户记录
-    const userRecord = await pb.collection('users').create({
+    // 使用管理员客户端创建用户并直接将 verified 设置为 true，规避由于邮件服务未配置导致新用户无法验证登录的问题
+    const userRecord = await pbAdmin.collection('users').create({
       email,
       password,
       passwordConfirm: password,
       name: nameToCheck,
       level: '标准',
       role: 'user',
-      balance: 0.00
+      balance: 0.00,
+      verified: true
     });
 
-    // 请求 PocketBase 发送账户验证邮件（如果后台开启了邮箱验证）
-    try {
-      await pb.collection('users').requestVerification(email);
-    } catch (e) {
-      // 验证邮件发送失败不阻断注册成功流程
-      console.warn('发送验证邮件失败:', e);
-    }
+    // 注册成功后，直接使用新创建的用户凭证进行登录认证，实现注册即自动登录
+    const pb = createPocketBaseClient();
+    const authData = await pb.collection('users').authWithPassword(email, password);
 
     return c.json<ApiResponse>({
       success: true,
@@ -67,12 +66,44 @@ auth.post('/register', async (c) => {
           id: userRecord.id,
           email: userRecord.email
         },
-        session: null // 提示用户去邮箱进行链接验证后才能登录
+        session: {
+          access_token: authData.token,
+          refresh_token: authData.token
+        }
       },
-      message: '注册成功！请前往您的邮箱点击验证链接，验证完成后即可登录。'
+      message: '注册成功，已自动为您登录！'
     }, 201);
   } catch (err: any) {
-    return c.json<ApiResponse>({ success: false, error: err.message }, 500);
+    // 捕获并解析 PocketBase 底层具体的属性校验失败细节
+    let friendlyError = err.message;
+    if (err.data && err.data.data) {
+      const details = Object.entries(err.data.data);
+      if (details.length > 0) {
+        const errorMsgs = details.map(([field, item]: [string, any]) => {
+          const fieldMap: Record<string, string> = {
+            email: '邮箱',
+            password: '密码',
+            passwordConfirm: '确认密码',
+            name: '昵称',
+            username: '用户名'
+          };
+          const friendlyField = fieldMap[field] || field;
+          
+          // 对常见英文报错内容进行汉化翻译
+          let msg = item.message || '';
+          if (msg.includes('must be between 8 and')) {
+            msg = '长度必须在 8 到 72 位之间';
+          } else if (msg.includes('invalid or already in use')) {
+            msg = '格式不正确或已被占用';
+          } else if (msg.includes('already in use')) {
+            msg = '已被占用';
+          }
+          return `${friendlyField}: ${msg}`;
+        });
+        friendlyError = errorMsgs.join('; ');
+      }
+    }
+    return c.json<ApiResponse>({ success: false, error: friendlyError }, 400);
   }
 });
 
@@ -80,7 +111,7 @@ auth.post('/register', async (c) => {
  * POST /api/auth/login
  * 登录支持使用 邮箱 或 昵称 登录
  */
-auth.post('/login', async (c) => {
+auth.post('/login', rateLimitMiddleware(10, 5 * 60 * 1000), async (c) => {
   const body = await c.req.json<LoginBody>();
   const { email, password } = body;
 
