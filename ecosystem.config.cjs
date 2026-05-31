@@ -19,9 +19,9 @@ module.exports = {
       // 🚨 入口脚本路径 (Entry script path)
       script: 'src/index.ts',
 
-      // 🚨 指定使用 Node.js 作为解释器，并加载 tsx 模块 (Specify node as interpreter and load tsx module)
+      // 🚨 指定使用 Node.js 作为解释器，并使用 --import 导入 tsx 模块 (Specify node as interpreter and import tsx module)
       interpreter: 'node',
-      interpreter_args: '--loader tsx',
+      interpreter_args: '--import tsx',
 
       // 执行模式：由于 Bun 对 PM2 cluster 集群模式支持尚不完善，此处采用 'fork' 模式运行
       exec_mode: 'fork',
