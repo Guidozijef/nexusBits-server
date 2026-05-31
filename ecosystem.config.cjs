@@ -18,7 +18,7 @@ module.exports = {
 
       // 🚨 使用 Node.js（通过 tsx）运行，替代 Bun
       // Bun 的原生 TLS 实现在 Linux 上存在 segfault 崩溃问题，导致 502
-      script: 'node_modules/.bin/tsx',
+      script: 'node_modules/tsx/dist/cli.mjs',
 
       // 🚨 传递给 tsx 运行程序的参数，等价于手动执行 `npx tsx src/index.ts`
       args: 'src/index.ts',
