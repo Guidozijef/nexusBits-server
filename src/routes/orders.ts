@@ -1,17 +1,15 @@
 import { Hono } from 'hono';
-import crypto from 'crypto';
-import { createSupabaseClient, supabaseAdmin } from '../lib/supabase';
+import { createPocketBaseClient, getPocketBaseAdmin } from '../lib/pocketbase';
 import { authMiddleware } from '../middleware/auth';
 import type { ApiResponse, PaginatedResponse, Order, DirectBuyBody, Variables } from '../types';
 
 const orders = new Hono<{ Variables: Variables }>();
 
-// All order routes require authentication
+// 所有订单路由都需要身份认证
 orders.use('*', authMiddleware);
 
 /**
- * Generate a unique, compact 10-character uppercase alphanumeric order number (e.g., 7G7S20ABCD)
- * Milliseconds since custom epoch in base-36 (6 chars) + Random entropy (4 chars)
+ * 随机生成紧凑的 10 位大写字母数字订单号 (例如: 7G7S20ABCD)
  */
 function generateOrderNo(): string {
   const offset = Date.now() - 1767225600000;
@@ -22,139 +20,176 @@ function generateOrderNo(): string {
 
 /**
  * GET /api/orders
- * Get current user's orders with pagination
+ * 分页获取当前用户的所有订单，并展开子项 (order_items)
  */
 orders.get('/', async (c) => {
   const userId = c.get('userId');
   const token = c.get('accessToken');
   const page = parseInt(c.req.query('page') || '1');
   const limit = parseInt(c.req.query('limit') || '10');
-  const offset = (page - 1) * limit;
 
-  const supabase = createSupabaseClient(token);
+  const pb = createPocketBaseClient(token);
 
-  const { data, error, count } = await supabase
-    .from('orders')
-    .select('*, items:order_items(id, product_id, product_name, price, quantity)', { count: 'exact' })
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+  try {
+    // PocketBase 支持使用 order_items(order_id) 反向展开属于该订单的所有细项
+    const resultList = await pb.collection('orders').getList(page, limit, {
+      filter: `user_id = "${userId}"`,
+      sort: '-created',
+      expand: 'order_items(order_id)'
+    });
 
-  if (error) {
-    return c.json<ApiResponse>({ success: false, error: error.message }, 500);
+    const mappedOrders: Order[] = resultList.items.map((order: any) => {
+      const rawItems = order.expand?.['order_items(order_id)'] || [];
+      const items = rawItems.map((item: any) => ({
+        id: item.id,
+        order_id: item.order_id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        price: item.price,
+        quantity: item.quantity,
+        package_name: item.package_name || null,
+        duration_name: item.duration_name || null,
+        variant_type: item.variant_type || null
+      }));
+
+      return {
+        id: order.id,
+        order_no: order.order_no,
+        user_id: order.user_id,
+        total_amount: order.total_amount,
+        status: order.status,
+        created_at: order.created,
+        updated_at: order.updated,
+        items: items
+      };
+    });
+
+    return c.json<PaginatedResponse<Order>>({
+      success: true,
+      data: mappedOrders,
+      total: resultList.totalItems,
+      page,
+      limit
+    });
+  } catch (err: any) {
+    return c.json<ApiResponse>({ success: false, error: err.message }, 500);
   }
-
-  return c.json<PaginatedResponse<Order>>({
-    success: true,
-    data: data || [],
-    total: count || 0,
-    page,
-    limit
-  });
 });
 
 /**
  * POST /api/orders
- * Create order from cart (checkout)
- * Deducts balance, creates order + order_items, clears cart, grants assets
+ * 购物车结算下单
+ * 扣除用户余额，创建 orders 与 order_items 记录，清除购物车，并发放已购资产授权
  */
 orders.post('/', async (c) => {
   const userId = c.get('userId');
   const token = c.get('accessToken');
-  const supabase = createSupabaseClient(token);
+  const pb = createPocketBaseClient(token);
 
-  // 1. Get cart items with product details
-  const { data: cartItems, error: cartError } = await supabase
-    .from('cart_items')
-    .select('*, product:products(id, name, price)')
-    .eq('user_id', userId);
+  try {
+    // 1. 获取购物车中所有物品及商品详情
+    const cartItems = await pb.collection('cart_items').getFullList({
+      filter: `user_id = "${userId}"`,
+      expand: 'product_id'
+    });
 
-  if (cartError) {
-    return c.json<ApiResponse>({ success: false, error: cartError.message }, 500);
-  }
+    if (!cartItems || cartItems.length === 0) {
+      return c.json<ApiResponse>({ success: false, error: '购物车为空' }, 400);
+    }
 
-  if (!cartItems || cartItems.length === 0) {
-    return c.json<ApiResponse>({ success: false, error: '购物车为空' }, 400);
-  }
+    // 2. 计算结算总价
+    const totalAmount = cartItems.reduce((sum, item) => {
+      const price = item.expand?.product_id?.price || 0;
+      return sum + price * item.quantity;
+    }, 0);
 
-  // 2. Calculate total
-  const totalAmount = cartItems.reduce((sum, item) => {
-    return sum + (item.product?.price || 0) * item.quantity;
-  }, 0);
+    // 3. 获取用户余额信息，为保证资金账目安全，使用 pbAdmin 读写
+    const pbAdmin = await getPocketBaseAdmin();
+    const userProfile = await pbAdmin.collection('users').getOne(userId);
 
-  // 3. Check balance (use admin to bypass RLS for financial operations)
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from('profiles')
-    .select('balance')
-    .eq('id', userId)
-    .single();
+    if (userProfile.balance < totalAmount) {
+      return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
+    }
 
-  if (profileError || !profile) {
-    return c.json<ApiResponse>({ success: false, error: '获取用户信息失败' }, 500);
-  }
-
-  if (profile.balance < totalAmount) {
-    return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
-  }
-
-  // 4. Create order
-  const orderNo = generateOrderNo();
-  const { data: order, error: orderError } = await supabaseAdmin
-    .from('orders')
-    .insert({
+    // 4. 创建订单主记录
+    const orderNo = generateOrderNo();
+    const orderRecord = await pbAdmin.collection('orders').create({
       order_no: orderNo,
       user_id: userId,
       total_amount: totalAmount,
       status: '处理中'
-    })
-    .select()
-    .single();
+    });
 
-  if (orderError) {
-    return c.json<ApiResponse>({ success: false, error: orderError.message }, 500);
+    // 5. 逐条写入订单细项 order_items
+    const orderItemsMapped = [];
+    for (const item of cartItems) {
+      const prodName = item.expand?.product_id?.name || 'Unknown';
+      const prodPrice = item.expand?.product_id?.price || 0;
+      
+      const orderItem = await pbAdmin.collection('order_items').create({
+        order_id: orderRecord.id,
+        product_id: item.product_id,
+        product_name: prodName,
+        price: prodPrice,
+        quantity: item.quantity
+      });
+
+      orderItemsMapped.push({
+        id: orderItem.id,
+        order_id: orderItem.order_id,
+        product_id: orderItem.product_id,
+        product_name: orderItem.product_name,
+        price: orderItem.price,
+        quantity: orderItem.quantity
+      });
+    }
+
+    // 6. 扣除余额并更新用户信息
+    const finalBalance = userProfile.balance - totalAmount;
+    await pbAdmin.collection('users').update(userId, {
+      balance: finalBalance
+    });
+
+    // 7. 发放资产授权密钥 user_assets
+    for (const item of cartItems) {
+      const prodName = item.expand?.product_id?.name || '虚拟商品';
+      await pbAdmin.collection('user_assets').create({
+        user_id: userId,
+        product_id: item.product_id,
+        order_id: orderRecord.id,
+        license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+        remark: `系统自动生成备注：授权成功！您购买的《${prodName}》已放入您的资产库。订单编号为：${orderRecord.order_no}。如有售后需求，请联系客服获取专有交付包。`
+      });
+    }
+
+    // 8. 结算完成后清除购物车
+    for (const item of cartItems) {
+      await pb.collection('cart_items').delete(item.id);
+    }
+
+    return c.json<ApiResponse>({
+      success: true,
+      data: {
+        id: orderRecord.id,
+        order_no: orderRecord.order_no,
+        user_id: orderRecord.user_id,
+        total_amount: orderRecord.total_amount,
+        status: orderRecord.status,
+        created_at: orderRecord.created,
+        updated_at: orderRecord.updated,
+        items: orderItemsMapped,
+        new_balance: finalBalance
+      },
+      message: '支付成功！资源已发放至您的仓库。'
+    }, 201);
+  } catch (err: any) {
+    return c.json<ApiResponse>({ success: false, error: err.message }, 500);
   }
-
-  // 5. Create order items
-  const orderItems = cartItems.map(item => ({
-    order_id: order.id,
-    product_id: item.product_id,
-    product_name: item.product?.name || 'Unknown',
-    price: item.product?.price || 0,
-    quantity: item.quantity
-  }));
-
-  await supabaseAdmin.from('order_items').insert(orderItems);
-
-  // 6. Deduct balance
-  await supabaseAdmin
-    .from('profiles')
-    .update({ balance: profile.balance - totalAmount, updated_at: new Date().toISOString() })
-    .eq('id', userId);
-
-  // 7. Grant user_assets
-  const assets = cartItems.map(item => ({
-    user_id: userId,
-    product_id: item.product_id,
-    order_id: order.id,
-    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-    remark: `系统自动生成备注：授权成功！您购买的《${item.product?.name || '虚拟商品'}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
-  }));
-
-  await supabaseAdmin.from('user_assets').insert(assets);
-
-  // 8. Clear cart
-  await supabase.from('cart_items').delete().eq('user_id', userId);
-
-  return c.json<ApiResponse>({
-    success: true,
-    data: { ...order, items: orderItems, new_balance: profile.balance - totalAmount },
-    message: '支付成功！资源已发放至您的仓库。'
-  }, 201);
 });
 
 /**
  * POST /api/orders/direct
- * Direct purchase a single product (立即支付)
+ * 立即支付购买单个商品
  */
 orders.post('/direct', async (c) => {
   const userId = c.get('userId');
@@ -165,115 +200,124 @@ orders.post('/direct', async (c) => {
     return c.json<ApiResponse>({ success: false, error: '商品ID不能为空' }, 400);
   }
 
-  // Get product
-  const supabase = createSupabaseClient(token);
-  const { data: product, error: productError } = await supabase
-    .from('products')
-    .select('id, name, price, types, packages, durations')
-    .eq('id', body.product_id)
-    .eq('status', 'active')
-    .single();
+  const pb = createPocketBaseClient(token);
 
-  if (productError || !product) {
-    return c.json<ApiResponse>({ success: false, error: '商品不存在' }, 404);
-  }
+  try {
+    // 获取商品详情
+    const product = await pb.collection('products').getOne(body.product_id);
 
-  // Compute price based on variants
-  const qty = body.quantity || 1;
-  let unitPrice = product.price;
-  let pkgName = null;
-  let durName = null;
-  let typeName = null;
-
-  if (body.type_idx !== undefined && product.types && product.types[body.type_idx]) {
-    typeName = product.types[body.type_idx];
-  }
-
-  if (body.pkg_id && product.packages) {
-    const pkg = (product.packages as any[]).find((p: any) => p.id === body.pkg_id);
-    if (pkg) {
-      if (pkg.type_idxs && body.type_idx !== undefined && !pkg.type_idxs.includes(body.type_idx)) {
-        return c.json<ApiResponse>({ success: false, error: '安全拦截：该套餐不适用于当前选择的类型组合' }, 400);
-      }
-      unitPrice = pkg.price;
-      pkgName = pkg.name;
+    if (product.status !== 'active') {
+      return c.json<ApiResponse>({ success: false, error: '商品不存在或已下架' }, 404);
     }
-  }
 
-  if (body.dur_id && product.durations) {
-    const dur = (product.durations as any[]).find((d: any) => d.id === body.dur_id);
-    if (dur) {
-      if (dur.pkg_ids && body.pkg_id !== undefined && !dur.pkg_ids.includes(body.pkg_id)) {
-        return c.json<ApiResponse>({ success: false, error: '安全拦截：该时长选项不适用于当前选择的套餐' }, 400);
-      }
-      unitPrice = dur.price_modifier;
-      durName = dur.name;
+    // 根据选择的多属性规格（类型/套餐/时长）计算单价
+    const qty = body.quantity || 1;
+    let unitPrice = product.price;
+    let pkgName = null;
+    let durName = null;
+    let typeName = null;
+
+    if (body.type_idx !== undefined && product.types && product.types[body.type_idx]) {
+      typeName = product.types[body.type_idx];
     }
-  }
 
-  const totalAmount = unitPrice * qty;
+    if (body.pkg_id && product.packages) {
+      const pkg = (product.packages as any[]).find((p: any) => p.id === body.pkg_id);
+      if (pkg) {
+        if (pkg.type_idxs && body.type_idx !== undefined && !pkg.type_idxs.includes(body.type_idx)) {
+          return c.json<ApiResponse>({ success: false, error: '安全拦截：该套餐不适用于当前选择的类型组合' }, 400);
+        }
+        unitPrice = pkg.price;
+        pkgName = pkg.name;
+      }
+    }
 
-  // Check balance
-  const { data: profile } = await supabaseAdmin
-    .from('profiles')
-    .select('balance')
-    .eq('id', userId)
-    .single();
+    if (body.dur_id && product.durations) {
+      const dur = (product.durations as any[]).find((d: any) => d.id === body.dur_id);
+      if (dur) {
+        if (dur.pkg_ids && body.pkg_id !== undefined && !dur.pkg_ids.includes(body.pkg_id)) {
+          return c.json<ApiResponse>({ success: false, error: '安全拦截：该时长选项不适用于当前选择的套餐' }, 400);
+        }
+        unitPrice = dur.price_modifier;
+        durName = dur.name;
+      }
+    }
 
-  if (!profile || profile.balance < totalAmount) {
-    return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
-  }
+    const totalAmount = unitPrice * qty;
 
-  // Create order
-  const orderNo = generateOrderNo();
-  const { data: order, error: orderError } = await supabaseAdmin
-    .from('orders')
-    .insert({
-      order_no: orderNo,
+    // 检查并扣减用户余额 (Admin 权限操作)
+    const pbAdmin = await getPocketBaseAdmin();
+    const userProfile = await pbAdmin.collection('users').getOne(userId);
+
+    if (userProfile.balance < totalAmount) {
+      return c.json<ApiResponse>({ success: false, error: '余额不足，请先充值' }, 400);
+    }
+
+    // 创建订单记录
+    const orderRecord = await pbAdmin.collection('orders').create({
+      order_no: generateOrderNo(),
       user_id: userId,
       total_amount: totalAmount,
       status: '处理中'
-    })
-    .select()
-    .single();
+    });
 
-  if (orderError) {
-    return c.json<ApiResponse>({ success: false, error: orderError.message }, 500);
+    // 写入订单详情项
+    const orderItemRecord = await pbAdmin.collection('order_items').create({
+      order_id: orderRecord.id,
+      product_id: product.id,
+      product_name: product.name,
+      price: unitPrice,
+      quantity: qty,
+      package_name: pkgName,
+      duration_name: durName,
+      variant_type: typeName
+    });
+
+    // 扣减用户账户余额
+    const finalBalance = userProfile.balance - totalAmount;
+    await pbAdmin.collection('users').update(userId, {
+      balance: finalBalance
+    });
+
+    // 生成资产授权记录
+    await pbAdmin.collection('user_assets').create({
+      user_id: userId,
+      product_id: product.id,
+      order_id: orderRecord.id,
+      license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+      remark: `系统自动生成备注：授权成功！您购买的《${product.name}》已放入您的资产库。订单编号为：${orderRecord.order_no}。如有售后需求，请联系客服获取专有交付包。`
+    });
+
+    return c.json<ApiResponse>({
+      success: true,
+      data: {
+        order: {
+          id: orderRecord.id,
+          order_no: orderRecord.order_no,
+          user_id: orderRecord.user_id,
+          total_amount: orderRecord.total_amount,
+          status: orderRecord.status,
+          created_at: orderRecord.created,
+          updated_at: orderRecord.updated,
+          items: [{
+            id: orderItemRecord.id,
+            order_id: orderItemRecord.order_id,
+            product_id: orderItemRecord.product_id,
+            product_name: orderItemRecord.product_name,
+            price: orderItemRecord.price,
+            quantity: orderItemRecord.quantity,
+            package_name: orderItemRecord.package_name,
+            duration_name: orderItemRecord.duration_name,
+            variant_type: orderItemRecord.variant_type
+          }]
+        },
+        new_balance: finalBalance
+      },
+      message: '支付成功！资源已发放至您的仓库。'
+    }, 201);
+  } catch (err: any) {
+    return c.json<ApiResponse>({ success: false, error: err.message }, 500);
   }
-
-  // Create order item
-  await supabaseAdmin.from('order_items').insert({
-    order_id: order.id,
-    product_id: product.id,
-    product_name: product.name,
-    price: unitPrice,
-    quantity: qty,
-    package_name: pkgName,
-    duration_name: durName,
-    variant_type: typeName
-  });
-
-  // Deduct balance
-  const newBalance = profile.balance - totalAmount;
-  await supabaseAdmin
-    .from('profiles')
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq('id', userId);
-
-  // Grant asset
-  await supabaseAdmin.from('user_assets').insert({
-    user_id: userId,
-    product_id: product.id,
-    order_id: order.id,
-    license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-    remark: `系统自动生成备注：授权成功！您购买的《${product.name}》已放入您的资产库。订单编号为：${order.order_no}。如有售后需求，请联系客服获取专有交付包。`
-  });
-
-  return c.json<ApiResponse>({
-    success: true,
-    data: { order, new_balance: newBalance },
-    message: '支付成功！资源已发放至您的仓库。'
-  }, 201);
 });
 
 export default orders;

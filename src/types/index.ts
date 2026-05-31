@@ -34,7 +34,7 @@ export interface UpdateProfileBody {
 
 // --- Category ---
 export interface Category {
-  id: number;
+  id: string;
   name: string;
   slug: string;
   sort_order: number;
@@ -50,6 +50,7 @@ export interface ProductPackage {
   type_idxs?: number[];
 }
 
+// Packages and durations nested within product JSON can keep number IDs
 export interface ProductDuration {
   id: number;
   name: string;
@@ -60,13 +61,13 @@ export interface ProductDuration {
 
 // --- Product ---
 export interface Product {
-  id: number;
+  id: string;
   name: string;
   description: string | null;
   long_description: string | null;
   price: number;
   currency: string;
-  category_id: number;
+  category_id: string;
   tag: string | null;
   image_url: string | null;
   thumbnail_urls: string[] | null;
@@ -93,9 +94,9 @@ export interface Product {
 
 // --- Cart ---
 export interface CartItem {
-  id: number;
+  id: string;
   user_id: string;
-  product_id: number;
+  product_id: string;
   quantity: number;
   created_at: string;
   // Joined
@@ -103,12 +104,12 @@ export interface CartItem {
 }
 
 export interface AddToCartBody {
-  product_id: number;
+  product_id: string;
 }
 
 // --- Order ---
 export interface Order {
-  id: number;
+  id: string;
   order_no: string;
   user_id: string;
   total_amount: number;
@@ -119,9 +120,9 @@ export interface Order {
 }
 
 export interface OrderItem {
-  id: number;
-  order_id: number;
-  product_id: number;
+  id: string;
+  order_id: string;
+  product_id: string;
   product_name: string;
   price: number;
   quantity: number;
@@ -131,7 +132,7 @@ export interface OrderItem {
 }
 
 export interface DirectBuyBody {
-  product_id: number;
+  product_id: string;
   quantity?: number;
   pkg_id?: number;
   dur_id?: number;

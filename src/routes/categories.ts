@@ -1,29 +1,35 @@
 import { Hono } from 'hono';
-import { createSupabaseClient } from '../lib/supabase';
+import { createPocketBaseClient } from '../lib/pocketbase';
 import type { ApiResponse, Category } from '../types';
 
 const categories = new Hono();
 
 /**
  * GET /api/categories
- * Get all categories sorted by sort_order
+ * 获取全部分类，并按 sort_order 升序排序
  */
 categories.get('/', async (c) => {
-  const supabase = createSupabaseClient();
+  const pb = createPocketBaseClient();
 
-  const { data, error } = await supabase
-    .from('categories')
-    .select('*')
-    .order('sort_order', { ascending: true });
+  try {
+    const records = await pb.collection('categories').getFullList({
+      sort: 'sort_order'
+    });
 
-  if (error) {
-    return c.json<ApiResponse>({ success: false, error: error.message }, 500);
+    const data: Category[] = records.map((item: any) => ({
+      id: item.id,
+      name: item.name,
+      slug: item.slug,
+      sort_order: item.sort_order
+    }));
+
+    return c.json<ApiResponse<Category[]>>({
+      success: true,
+      data: data
+    });
+  } catch (err: any) {
+    return c.json<ApiResponse>({ success: false, error: err.message }, 500);
   }
-
-  return c.json<ApiResponse<Category[]>>({
-    success: true,
-    data: data || []
-  });
 });
 
 export default categories;

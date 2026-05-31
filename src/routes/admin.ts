@@ -1,102 +1,161 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth';
 import { adminMiddleware } from '../middleware/admin';
-import { createSupabaseClient } from '../lib/supabase';
+import { createPocketBaseClient } from '../lib/pocketbase';
 import type { Variables } from '../types';
 
 const app = new Hono<{ Variables: Variables }>();
 
-// All admin routes require auth and admin privileges
+// 所有管理后台接口均需要登录校验与管理员权限校验
 app.use('*', authMiddleware, adminMiddleware);
 
-// --- User Management ---
+// 辅助映射函数：Profile
+function mapProfile(record: any) {
+  return {
+    id: record.id,
+    display_name: record.name || '匿名用户',
+    avatar_url: record.avatar || null,
+    level: record.level || '标准',
+    role: record.role || 'user',
+    balance: record.balance || 0,
+    email: record.email || null,
+    created_at: record.created,
+    updated_at: record.updated
+  };
+}
 
+// 辅助映射函数：Product
+function mapProductRecord(item: any) {
+  return {
+    id: item.id,
+    name: item.name,
+    description: item.description || null,
+    long_description: item.long_description || null,
+    price: item.price,
+    currency: item.currency || 'NB',
+    category_id: item.category_id,
+    tag: item.tag || null,
+    image_url: item.image_url || null,
+    thumbnail_urls: item.thumbnail_urls || null,
+    file_format: item.file_format || null,
+    file_size: item.file_size || null,
+    asset_type: item.asset_type || null,
+    polygon_count: item.polygon_count || null,
+    license_type: item.license_type || '商业使用',
+    update_policy: item.update_policy || '终身',
+    status: item.status || 'draft',
+    is_featured: item.is_featured || false,
+    sort_order: item.sort_order || 0,
+    types: item.types || null,
+    packages: item.packages || null,
+    durations: item.durations || null,
+    notices: item.notices || null,
+    admin_note: item.admin_note || null,
+    cost: item.cost || 0,
+    created_at: item.created,
+    updated_at: item.updated,
+    category: item.expand?.category_id
+      ? {
+          id: item.expand.category_id.id,
+          name: item.expand.category_id.name
+        }
+      : undefined
+  };
+}
+
+// --- 用户管理 (User Management) ---
+
+/**
+ * GET /api/admin/users
+ * 获取用户列表
+ */
 app.get('/users', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   
-  const { data, error, count } = await supabase
-    .from('profiles')
-    .select('*', { count: 'exact' })
-    .order('created_at', { ascending: false });
+  try {
+    const resultList = await pb.collection('users').getList(1, 100, {
+      sort: '-created'
+    });
 
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    const data = resultList.items.map(mapProfile);
+    return c.json({ success: true, data, total: resultList.totalItems });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data, total: count });
 });
 
-// --- Product Management ---
+// --- 商品管理 (Product Management) ---
 
-// Get all products with filtering
+/**
+ * GET /api/admin/products
+ * 获取所有商品列表（支持按名称、分类和状态筛选）
+ */
 app.get('/products', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const { name, category_id, status } = c.req.query();
   
-  let query = supabase
-    .from('products')
-    .select(`
-      *,
-      category:categories(id, name)
-    `, { count: 'exact' });
-
+  const filterList = [];
   if (name) {
-    query = query.ilike('name', `%${name}%`);
+    filterList.push(`name ~ "${name.replace(/"/g, '\\"')}"`);
   }
   if (category_id) {
-    query = query.eq('category_id', category_id);
+    filterList.push(`category_id = "${category_id}"`);
   }
   if (status) {
-    query = query.eq('status', status);
+    filterList.push(`status = "${status}"`);
   }
+  const filterString = filterList.join(' && ');
 
-  const { data, error, count } = await query.order('created_at', { ascending: false });
+  try {
+    const resultList = await pb.collection('products').getList(1, 100, {
+      filter: filterString,
+      sort: '-created',
+      expand: 'category_id'
+    });
 
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    const data = resultList.items.map(mapProductRecord);
+    return c.json({ success: true, data, total: resultList.totalItems });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data, total: count });
 });
 
-// Get single product for editing (includes admin_note)
+/**
+ * GET /api/admin/products/:id
+ * 编辑商品时获取商品详情（包含 admin_note）
+ */
 app.get('/products/:id', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
   
-  const { data, error } = await supabase
-    .from('products')
-    .select(`
-      *,
-      category:categories(id, name)
-    `)
-    .eq('id', id)
-    .single();
-
-  if (error || !data) {
-    return c.json({ success: false, error: error?.message || '商品不存在' }, 404);
+  try {
+    const record = await pb.collection('products').getOne(id, {
+      expand: 'category_id'
+    });
+    return c.json({ success: true, data: mapProductRecord(record) });
+  } catch (err: any) {
+    return c.json({ success: false, error: '商品不存在' }, 404);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Create product
+/**
+ * POST /api/admin/products
+ * 创建商品
+ */
 app.post('/products', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const body = await c.req.json();
   
-  // Basic validation (can be expanded)
   if (!body.name || !body.price || !body.category_id) {
     return c.json({ success: false, error: '缺少必填字段' }, 400);
   }
 
-  const { data, error } = await supabase
-    .from('products')
-    .insert([{
+  try {
+    const record = await pb.collection('products').create({
       name: body.name,
       description: body.description,
       long_description: body.long_description,
-      price: body.price,
+      price: parseFloat(body.price),
       currency: body.currency || 'NB',
       category_id: body.category_id,
       tag: body.tag,
@@ -111,36 +170,35 @@ app.post('/products', async (c) => {
       status: body.status || 'draft',
       is_featured: body.is_featured || false,
       sort_order: body.sort_order || 0,
-      types: body.types,
-      packages: body.packages,
-      durations: body.durations,
-      notices: body.notices,
+      types: body.types || [],
+      packages: body.packages || [],
+      durations: body.durations || [],
+      notices: body.notices || [],
       admin_note: body.admin_note,
-      cost: body.cost || 0
-    }])
-    .select()
-    .single();
+      cost: body.cost ? parseFloat(body.cost) : 0
+    });
 
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    return c.json({ success: true, data: mapProductRecord(record) });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Update product
+/**
+ * PUT /api/admin/products/:id
+ * 更新商品
+ */
 app.put('/products/:id', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
   const body = await c.req.json();
 
-  const { data, error } = await supabase
-    .from('products')
-    .update({
+  try {
+    const record = await pb.collection('products').update(id, {
       name: body.name,
       description: body.description,
       long_description: body.long_description,
-      price: body.price,
+      price: parseFloat(body.price),
       currency: body.currency,
       category_id: body.category_id,
       tag: body.tag,
@@ -160,23 +218,21 @@ app.put('/products/:id', async (c) => {
       durations: body.durations,
       notices: body.notices,
       admin_note: body.admin_note,
-      cost: body.cost,
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', id)
-    .select()
-    .single();
+      cost: body.cost ? parseFloat(body.cost) : 0
+    });
 
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    return c.json({ success: true, data: mapProductRecord(record) });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Update product status
+/**
+ * PUT /api/admin/products/:id/status
+ * 快速更新商品状态
+ */
 app.put('/products/:id/status', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
   const { status } = await c.req.json();
 
@@ -184,280 +240,265 @@ app.put('/products/:id/status', async (c) => {
     return c.json({ success: false, error: '无效的状态' }, 400);
   }
 
-  const { data, error } = await supabase
-    .from('products')
-    .update({ status, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+  try {
+    const record = await pb.collection('products').update(id, { status });
+    return c.json({ success: true, data: mapProductRecord(record) });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Delete product
+/**
+ * DELETE /api/admin/products/:id
+ * 删除商品
+ */
 app.delete('/products/:id', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
 
-  const { error } = await supabase
-    .from('products')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+  try {
+    await pb.collection('products').delete(id);
+    return c.json({ success: true });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true });
 });
 
-// --- Category Management ---
+// --- 分类管理 (Category Management) ---
 
-// Create category
+/**
+ * POST /api/admin/categories
+ * 新增分类
+ */
 app.post('/categories', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
-  const { name, icon, sort_order } = await c.req.json();
+  const pb = createPocketBaseClient(c.get('accessToken'));
+  const { name, sort_order } = await c.req.json();
 
   if (!name) {
     return c.json({ success: false, error: '分类名称必填' }, 400);
   }
 
-  const { data, error } = await supabase
-    .from('categories')
-    .insert([{ name, icon, sort_order: sort_order || 0 }])
-    .select()
-    .single();
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+  try {
+    const record = await pb.collection('categories').create({
+      name,
+      slug,
+      sort_order: sort_order || 0
+    });
+    return c.json({ success: true, data: record });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Update category
+/**
+ * PUT /api/admin/categories/:id
+ * 修改分类
+ */
 app.put('/categories/:id', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
-  const { name, icon, sort_order } = await c.req.json();
+  const { name, sort_order } = await c.req.json();
 
   if (!name) {
     return c.json({ success: false, error: '分类名称必填' }, 400);
   }
 
-  const { data, error } = await supabase
-    .from('categories')
-    .update({ name, icon, sort_order: sort_order || 0 })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+  try {
+    const record = await pb.collection('categories').update(id, {
+      name,
+      sort_order: sort_order || 0
+    });
+    return c.json({ success: true, data: record });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  return c.json({ success: true, data });
 });
 
-// Delete category
+/**
+ * DELETE /api/admin/categories/:id
+ * 删除分类（如果分类下有商品，则不允许删除）
+ */
 app.delete('/categories/:id', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const id = c.req.param('id');
 
-  // Check if there are products in this category
-  const { count, error: countError } = await supabase
-    .from('products')
-    .select('*', { count: 'exact', head: true })
-    .eq('category_id', id);
+  try {
+    // 检查是否有商品正在使用该分类
+    const countResult = await pb.collection('products').getList(1, 1, {
+      filter: `category_id = "${id}"`
+    });
 
-  if (countError) {
-    return c.json({ success: false, error: countError.message }, 500);
+    if (countResult.totalItems > 0) {
+      return c.json({ success: false, error: '该分类下还有商品，不能删除' }, 400);
+    }
+
+    await pb.collection('categories').delete(id);
+    return c.json({ success: true });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  if (count && count > 0) {
-    return c.json({ success: false, error: '该分类下还有商品，不能删除' }, 400);
-  }
-
-  const { error } = await supabase
-    .from('categories')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
-  }
-
-  return c.json({ success: true });
 });
 
-// --- Order Management ---
+// --- 订单管理与发货备注交付 (Order Management) ---
 
-// Get all orders with filtering and pagination
+/**
+ * GET /api/admin/orders
+ * 管理后台获取订单列表（支持分页、按单号/状态筛选，按邮箱/昵称搜索下单人）
+ */
 app.get('/orders', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
+  const pb = createPocketBaseClient(c.get('accessToken'));
   const { order_no, search, status, page = '1', limit = '10' } = c.req.query();
   
-  const from = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-  const to = from + parseInt(limit, 10) - 1;
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
 
-  let userIds: string[] = [];
-  if (search) {
-    // Look up users matching search term (email or display name)
-    const { data: matchedUsers } = await supabase
-      .from('profiles')
-      .select('id')
-      .or(`email.ilike.%${search}%,display_name.ilike.%${search}%`);
-    if (matchedUsers && matchedUsers.length > 0) {
+  try {
+    // 1. 如果有全局搜索词，先在用户表中模糊匹配用户 ID
+    let userIds: string[] = [];
+    if (search) {
+      const matchedUsers = await pb.collection('users').getFullList({
+        filter: `email ~ "${search.replace(/"/g, '\\"')}" || name ~ "${search.replace(/"/g, '\\"')}"`
+      });
       userIds = matchedUsers.map(u => u.id);
     }
-  }
 
-  let query = supabase
-    .from('orders')
-    .select(`
-      *,
-      items:order_items(*)
-    `, { count: 'exact' });
-
-  if (order_no) {
-    query = query.ilike('order_no', `%${order_no}%`);
-  }
-
-  if (status) {
-    query = query.eq('status', status);
-  }
-
-  if (search) {
-    if (userIds.length > 0) {
-      query = query.or(`user_id.in.(${userIds.join(',')}),order_no.ilike.%${search}%`);
-    } else {
-      query = query.ilike('order_no', `%${search}%`);
+    // 2. 拼接订单过滤条件
+    const filterList = [];
+    if (order_no) {
+      filterList.push(`order_no ~ "${order_no.replace(/"/g, '\\"')}"`);
     }
-  }
-
-  const { data: orders, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(from, to);
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 500);
-  }
-
-  // Load and merge profiles, user_assets and product admin_notes in-memory
-  if (orders && orders.length > 0) {
-    const uniqueUserIds = [...new Set(orders.map(o => o.user_id))];
-    const orderIds = orders.map(o => o.id);
-    
-    // Extract unique product IDs from order items
-    const productIds: number[] = [];
-    orders.forEach((o: any) => {
-      if (o.items) {
-        o.items.forEach((item: any) => {
-          if (item.product_id) {
-            productIds.push(item.product_id);
-          }
-        });
+    if (status) {
+      filterList.push(`status = "${status}"`);
+    }
+    if (search) {
+      const subConditions = [`order_no ~ "${search.replace(/"/g, '\\"')}"`];
+      if (userIds.length > 0) {
+        const idFilters = userIds.map(uid => `user_id = "${uid}"`).join(' || ');
+        subConditions.push(`(${idFilters})`);
       }
+      filterList.push(`(${subConditions.join(' || ')})`);
+    }
+    const filterString = filterList.join(' && ');
+
+    // 3. 分页拉取订单信息，并级联展开下单人 (user_id) 和订单细项 order_items
+    const resultList = await pb.collection('orders').getList(pageNum, limitNum, {
+      filter: filterString,
+      sort: '-created',
+      expand: 'user_id,order_items(order_id)'
     });
-    const uniqueProductIds = [...new Set(productIds)];
 
-    // Concurrently fetch profiles, assets and product notes in separate clean queries
-    const [profilesResult, assetsResult, productsResult] = await Promise.all([
-      supabase.from('profiles').select('id, display_name, email, avatar_url').in('id', uniqueUserIds),
-      supabase.from('user_assets').select('*').in('order_id', orderIds),
-      supabase.from('products').select('id, admin_note').in('id', uniqueProductIds)
-    ]);
+    const orders = resultList.items;
 
-    const profiles = profilesResult.data || [];
-    const assets = assetsResult.data || [];
-    const products = productsResult.data || [];
-
-    orders.forEach((order: any) => {
-      // Bind profile in-memory
-      order.profile = profiles.find(p => p.id === order.user_id) || null;
-
-      // Bind assets and product notes in-memory to items
-      order.items = order.items.map((item: any) => {
-        const asset = assets.find(a => a.product_id === item.product_id && a.order_id === order.id);
-        const product = products.find(p => p.id === item.product_id);
-        return {
-          ...item,
-          asset_id: asset?.id || null,
-          remark: asset?.remark || '',
-          product_admin_note: product?.admin_note || ''
-        };
+    // 4. 并行加载订单细项中涉及的授权资产 (user_assets) 以及产品内部备注 (admin_note)
+    if (orders.length > 0) {
+      const orderIds = orders.map(o => o.id);
+      const productIds: string[] = [];
+      orders.forEach((o: any) => {
+        const items = o.expand?.['order_items(order_id)'] || [];
+        items.forEach((item: any) => {
+          if (item.product_id) productIds.push(item.product_id);
+        });
       });
-    });
-  }
+      const uniqueProductIds = [...new Set(productIds)];
 
-  return c.json({ success: true, data: orders, total: count });
+      const assetsFilter = orderIds.map(oid => `order_id = "${oid}"`).join(' || ') || 'id = ""';
+      const productsFilter = uniqueProductIds.map(pid => `id = "${pid}"`).join(' || ') || 'id = ""';
+
+      const [assetsResult, productsResult] = await Promise.all([
+        pb.collection('user_assets').getFullList({ filter: assetsFilter }),
+        pb.collection('products').getFullList({ filter: productsFilter })
+      ]);
+
+      // 5. 在内存中组合拼装数据，保持与原接口的响应格式完全一致
+      orders.forEach((order: any) => {
+        // 下单人基本信息
+        order.profile = order.expand?.user_id
+          ? {
+              id: order.expand.user_id.id,
+              display_name: order.expand.user_id.name || '匿名用户',
+              email: order.expand.user_id.email,
+              avatar_url: order.expand.user_id.avatar || null
+            }
+          : null;
+
+        // 订单细项
+        const rawItems = order.expand?.['order_items(order_id)'] || [];
+        order.items = rawItems.map((item: any) => {
+          const matchedAsset = assetsResult.find(a => a.product_id === item.product_id && a.order_id === order.id);
+          const matchedProduct = productsResult.find(p => p.id === item.product_id);
+          
+          return {
+            id: item.id,
+            order_id: item.order_id,
+            product_id: item.product_id,
+            product_name: item.product_name,
+            price: item.price,
+            quantity: item.quantity,
+            package_name: item.package_name || null,
+            duration_name: item.duration_name || null,
+            variant_type: item.variant_type || null,
+            asset_id: matchedAsset?.id || null,
+            remark: matchedAsset?.remark || '',
+            product_admin_note: matchedProduct?.admin_note || ''
+          };
+        });
+      });
+    }
+
+    return c.json({ success: true, data: orders, total: resultList.totalItems });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
 });
 
-// Update or create remark for a purchased product in an order
+/**
+ * PUT /api/admin/orders/:orderId/products/:productId/remark
+ * 管理员为某笔订单中购买的商品更新发货交付信息（备注），并自动将订单状态标记为“已完成”
+ */
 app.put('/orders/:orderId/products/:productId/remark', async (c) => {
-  const supabase = createSupabaseClient(c.get('accessToken'));
-  const orderId = parseInt(c.req.param('orderId'), 10);
-  const productId = parseInt(c.req.param('productId'), 10);
+  const pb = createPocketBaseClient(c.get('accessToken'));
+  const orderId = c.req.param('orderId');
+  const productId = c.req.param('productId');
   const { remark } = await c.req.json();
 
-  // 1. Fetch order details to retrieve user_id
-  const { data: order, error: orderErr } = await supabase
-    .from('orders')
-    .select('user_id')
-    .eq('id', orderId)
-    .single();
+  try {
+    // 1. 获取订单主信息拿到关联的用户 id
+    const orderRecord = await pb.collection('orders').getOne(orderId);
 
-  if (orderErr || !order) {
-    return c.json({ success: false, error: '未找到该订单信息' }, 404);
-  }
+    // 2. 检查对应的资产记录 user_assets 是否已存在
+    const assetsList = await pb.collection('user_assets').getList(1, 1, {
+      filter: `order_id = "${orderId}" && product_id = "${productId}"`
+    });
 
-  // 2. Check if a user_asset record already exists for this order + product
-  const { data: existingAsset } = await supabase
-    .from('user_assets')
-    .select('id')
-    .eq('order_id', orderId)
-    .eq('product_id', productId)
-    .maybeSingle();
-
-  let result;
-  if (existingAsset) {
-    // Update existing remark
-    result = await supabase
-      .from('user_assets')
-      .update({ remark, acquired_at: new Date().toISOString() })
-      .eq('id', existingAsset.id)
-      .select()
-      .single();
-  } else {
-    // Reconstruct asset if missing
-    result = await supabase
-      .from('user_assets')
-      .insert([{
-        user_id: order.user_id,
+    let resultAsset;
+    const firstAsset = assetsList.items[0];
+    if (firstAsset) {
+      // 若已存在，则更新该资产的备注内容
+      resultAsset = await pb.collection('user_assets').update(firstAsset.id, {
+        remark
+      });
+    } else {
+      // 若未找到，则重新补发一条资产授权信息
+      resultAsset = await pb.collection('user_assets').create({
+        user_id: orderRecord.user_id,
         product_id: productId,
         order_id: orderId,
         remark: remark,
         license_key: `LK-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
-      }])
-      .select()
-      .single();
+      });
+    }
+
+    // 3. 将订单状态自动标记为“已完成”
+    await pb.collection('orders').update(orderId, {
+      status: '已完成'
+    });
+
+    return c.json({ success: true, data: resultAsset });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
-
-  if (result.error) {
-    return c.json({ success: false, error: result.error.message }, 500);
-  }
-
-  // 3. Automatically update the order status to '已完成' since remarks/delivery info is updated
-  await supabase
-    .from('orders')
-    .update({ status: '已完成', updated_at: new Date().toISOString() })
-    .eq('id', orderId);
-
-  return c.json({ success: true, data: result.data });
 });
 
 export default app;

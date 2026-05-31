@@ -1,11 +1,11 @@
 import { createMiddleware } from 'hono/factory';
-import { createPocketBaseClient } from '../lib/pocketbase';
+import { createSupabaseClient } from '../lib/supabase';
 import type { Variables } from '../types';
 
 /**
- * 管理员权限校验中间件
- * 继承自 authMiddleware 写入的上下文状态。
- * 从 PocketBase 获取当前用户的角色，校验是否具有 'admin' 权限。
+ * Admin Middleware
+ * Assumes authMiddleware has already run and populated userId and accessToken.
+ * Fetches the user's profile and checks if role === 'admin'.
  */
 export const adminMiddleware = createMiddleware<{ Variables: Variables }>(async (c, next) => {
   const userId = c.get('userId');
@@ -16,20 +16,23 @@ export const adminMiddleware = createMiddleware<{ Variables: Variables }>(async 
   }
 
   try {
-    const pb = createPocketBaseClient(token);
-    // 从 users 集合中获取用户记录
-    const user = await pb.collection('users').getOne(userId);
+    const supabase = createSupabaseClient(token);
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', userId)
+      .single();
 
-    if (!user) {
+    if (error || !profile) {
       return c.json({ success: false, error: '无法获取用户信息' }, 403);
     }
 
-    if (user.role !== 'admin') {
+    if (profile.role !== 'admin') {
       return c.json({ success: false, error: '权限不足，需要管理员权限' }, 403);
     }
 
     await next();
-  } catch (err: any) {
+  } catch {
     return c.json({ success: false, error: '权限校验失败' }, 403);
   }
 });
