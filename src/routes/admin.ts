@@ -267,7 +267,12 @@ app.delete('/products/:id', async (c) => {
     await pb.collection('products').delete(id);
     return c.json({ success: true });
   } catch (err: any) {
-    return c.json({ success: false, error: err.message }, 500);
+    let errorMsg = err.message;
+    // 检测是否因存在外键关联（如订单、用户资产等）导致删除失败
+    if (err.message.includes('relation reference') || err.message.includes('part of a required relation')) {
+      errorMsg = '该商品已有订单记录、用户授权资产或处于购物车中，无法直接物理删除。为了保证历史账目完整性，请在后台将商品状态修改为“已下架”或“已归档”。';
+    }
+    return c.json({ success: false, error: errorMsg }, 400);
   }
 });
 
